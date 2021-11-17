@@ -1,122 +1,142 @@
-# import the necessary packages
-from imutils.perspective import four_point_transform
-from imutils import contours
-import numpy as np
-import argparse
+import os
 import imutils
+import numpy as np
 import cv2
+from math import ceil
+from imutils.perspective import four_point_transform
 
-# construct the argument parse and parse the arguments
-ap = argparse.ArgumentParser()
-ap.add_argument("-i", "--image", required=True,
-	help="path to the input image")
-args = vars(ap.parse_args())
-# define the answer key which maps the question number
-# to the correct answer
-ANSWER_KEY = {0: 1, 1: 4, 2: 0, 3: 3, 4: 1}
 
-# load the image, convert it to grayscale, blur it
-# slightly, then find edges
-image = cv2.imread(args["image"])
-gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-edged = cv2.Canny(blurred, 75, 200)
+def get_x(s):
+    return s[1][0]
 
-# find contours in the edge map, then initialize
-# the contour that corresponds to the document
-cnts = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL,
-	cv2.CHAIN_APPROX_SIMPLE)
-cnts = imutils.grab_contours(cnts)
-docCnt = None
-# ensure that at least one contour was found
-if len(cnts) > 0:
-	# sort the contours according to their size in
-	# descending order
-	cnts = sorted(cnts, key=cv2.contourArea, reverse=True)
-	# loop over the sorted contours
-	for c in cnts:
-		# approximate the contour
-		peri = cv2.arcLength(c, True)
-		approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-		# if our approximated contour has four points,
-		# then we can assume we have found the paper
-		if len(approx) == 4:
-			docCnt = approx
-			break
 
-# apply a four point perspective transform to both the
-# original image and grayscale image to obtain a top-down
-# birds eye view of the paper
-paper = four_point_transform(image, docCnt.reshape(4, 2))
-warped = four_point_transform(gray, docCnt.reshape(4, 2))
+def get_x_ver1(s):
+    s = cv2.boundingRect(s)
+    return s[0] * s[1]
 
-# apply Otsu's thresholding method to binarize the warped
-# piece of paper
-thresh = cv2.threshold(warped, 0, 255,
-	cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
 
-# find contours in the thresholded image, then initialize
-# the list of contours that correspond to questions
-cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL,
-	cv2.CHAIN_APPROX_SIMPLE)
-cnts = imutils.grab_contours(cnts)
-questionCnts = []
-# loop over the contours
-for c in cnts:
-	# compute the bounding box of the contour, then use the
-	# bounding box to derive the aspect ratio
-	(x, y, w, h) = cv2.boundingRect(c)
-	ar = w / float(h)
-	# in order to label the contour as a question, region
-	# should be sufficiently wide, sufficiently tall, and
-	# have an aspect ratio approximately equal to 1
-	if w >= 20 and h >= 20 and ar >= 0.9 and ar <= 1.1:
-		questionCnts.append(c)
+def get_size_box(ctn):
+    x_curr, y_curr, w_curr, h_curr = cv2.boundingRect(ctn)
+    return w_curr * h_curr
 
-# sort the question contours top-to-bottom, then initialize
-# the total number of correct answers
-questionCnts = contours.sort_contours(questionCnts,
-	method="top-to-bottom")[0]
-correct = 0
-# each question has 5 possible answers, to loop over the
-# question in batches of 5
-for (q, i) in enumerate(np.arange(0, len(questionCnts), 5)):
-	# sort the contours for the current question from
-	# left to right, then initialize the index of the
-	# bubbled answer
-	cnts = contours.sort_contours(questionCnts[i:i + 5])[0]
-	bubbled = None
-	# loop over the sorted contours
-	for (j, c) in enumerate(cnts):
-		# construct a mask that reveals only the current
-		# "bubble" for the question
-		mask = np.zeros(thresh.shape, dtype="uint8")
-		cv2.drawContours(mask, [c], -1, 255, -1)
-		# apply the mask to the thresholded image, then
-		# count the number of non-zero pixels in the
-		# bubble area
-		mask = cv2.bitwise_and(thresh, thresh, mask=mask)
-		total = cv2.countNonZero(mask)
-		# if the current total has a larger number of total
-		# non-zero pixels, then we are examining the currently
-		# bubbled-in answer
-		if bubbled is None or total > bubbled[0]:
-			bubbled = (total, j)
-	# initialize the contour color and the index of the
-	# *correct* answer
-	color = (0, 0, 255)
-	k = ANSWER_KEY[q]
-	# check to see if the bubbled answer is correct
-	if k == bubbled[1]:
-		color = (0, 255, 0)
-		correct += 1
-	# draw the outline of the correct answer on the test
-	cv2.drawContours(paper, [cnts[k]], -1, color, 3)
-# grab the test taker
-score = (correct / 5.0) * 100
-print("[INFO] score: {:.2f}%".format(score))
-cv2.putText(paper, "{:.2f}%".format(score), (10, 30),
-	cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-cv2.imshow("Original", image)
-cv2.imshow("Exam", paper)
-cv2.waitKey(0)
+
+def get_box(img, cnt):
+    D = cv2.arcLength(cnt, True)
+    approx = cv2.approxPolyDP(cnt, 0.04 * D, True)
+    docCnt = approx
+    
+    if len(docCnt) == 4:
+        paper = four_point_transform(img, docCnt.reshape(4, 2))
+    else:
+        rect = cv2.minAreaRect(cnt)
+        box = cv2.boxPoints(rect)
+        paper = four_point_transform(img, box)
+    
+    return paper
+
+
+def crop_paper(img):
+    gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray_img, (7, 7), 0)
+    (thresh, im_bw) = cv2.threshold(blurred, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    img_canny = cv2.Canny(im_bw, 10, 70)
+    
+    cnts = cv2.findContours(img_canny.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = imutils.grab_contours(cnts)
+    cnts = sorted(cnts, key=get_size_box, reverse=True)
+    
+    D = cv2.arcLength(cnts[0], True)
+    approx = cv2.approxPolyDP(cnts[0], 0.04 * D, True)
+    docCnt = approx
+    
+    if len(docCnt) == 4:
+        paper = four_point_transform(img, docCnt.reshape(4, 2))
+    else:
+        rect = cv2.minAreaRect(cnts[0])
+        box = cv2.boxPoints(rect)
+        paper = four_point_transform(img, box)
+    
+    return paper
+
+
+def get_ans_boxes(img):
+    paper = crop_paper(img)
+    gray_img = cv2.cvtColor(paper, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray_img, (5, 5), 0)
+    img_canny = cv2.Canny(blurred, 75, 200)
+    cnts = cv2.findContours(img_canny.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = imutils.grab_contours(cnts)
+    
+    ans_blocks = []
+    x_old, y_old, w_old, h_old = 0, 0, 0, 0
+    
+    if len(cnts) > 0:
+        cnts = sorted(cnts, key=get_x_ver1)
+        
+        for c in cnts:
+            x_curr, y_curr, w_curr, h_curr = cv2.boundingRect(c)
+            if 0.19 > (w_curr * h_curr) / (paper.shape[0] * paper.shape[1]) > 0.1:
+                check_xy_min = x_curr * y_curr - x_old * y_old
+                check_xy_max = (x_curr + w_curr) * (y_curr + h_curr) - (x_old + w_old) * (y_old + h_old)
+                
+                if len(ans_blocks) == 0:
+                    ans_blocks.append((get_box(paper, c), [x_curr, y_curr]))
+                    x_old = x_curr
+                    y_old = y_curr
+                    w_old = w_curr
+                    h_old = h_curr
+                elif check_xy_min > 20000 and check_xy_max > 20000:
+                    ans_blocks.append((get_box(paper, c), [x_curr, y_curr]))
+                    x_old = x_curr
+                    y_old = y_curr
+                    w_old = w_curr
+                    h_old = h_curr
+        
+        sorted_ans_blocks = sorted(ans_blocks, key=get_x)
+        
+    return sorted_ans_blocks
+
+
+def process_ans_blocks(ans_blocks):
+    list_answers = []
+
+    for ans_block in ans_blocks:
+        ans_block_img = np.array(ans_block[0])
+        offset1 = ceil(ans_block_img.shape[0] / 6)
+        for i in range(6):
+            box_img = np.array(ans_block_img[i * offset1:(i + 1) * offset1, :])
+            gray = cv2.cvtColor(box_img, cv2.COLOR_BGR2GRAY)
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+            thresh = cv2.Canny(blurred, 10, 60)
+            
+            end = 0
+            start = 0
+            for i in range(thresh.shape[0]):
+                if np.count_nonzero(thresh[i]) > 7:
+                    end = i
+                else:
+                    if end - start > 15:
+                        list_answers.append(box_img[start:end, :])
+                    start = i
+
+    return list_answers
+
+
+def process_list_ans(list_answers):
+    list_choices = []
+    for i, answer_img in enumerate(list_answers):
+        start = ceil(0.2 * answer_img.shape[1])
+        end = answer_img.shape[1] - 15
+        bubble_choice = answer_img[:, start:end]
+        list_choices.append(bubble_choice)
+    return list_choices
+
+
+if __name__ == '__main__':
+    for i, path in enumerate(os.listdir("dataset")):
+        img = cv2.imread(os.path.join("dataset/", path))
+        list_ans_boxes = get_ans_boxes(img)
+        list_ans = process_ans_blocks(list_ans_boxes)
+        list_ans = process_list_ans(list_ans)
+        for j, ans in enumerate(list_ans):
+            cv2.imwrite("data/" + str(i) + "t" + str(j) + ".jpg", ans)
