@@ -38,21 +38,21 @@ def get_box(img, cnt):
 
 def crop_paper(img):
     gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray_img, (7, 7), 0)
-    im_bw = cv2.threshold(blurred, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
-    img_canny = cv2.Canny(im_bw, 10, 70)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (12, 12))
+    dilation = cv2.dilate(gray_img, kernel)
+    edge_img = cv2.Canny(dilation, 50, 200)
     
-    cnts = cv2.findContours(img_canny.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cnts = imutils.grab_contours(cnts)
+    cnts, _ = cv2.findContours(edge_img.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
     cnts = sorted(cnts, key=get_size_box, reverse=True)
     
     paper = get_box(gray_img, cnts[0])
+    
     return paper
 
 
 def get_ans_boxes(paper):
-    blurred = cv2.GaussianBlur(paper, (5, 5), 0)
-    img_canny = cv2.Canny(blurred, 75, 200)
+    blurred = cv2.GaussianBlur(paper, (5, 5), 1)
+    img_canny = cv2.Canny(blurred, 50, 200)
     cnts = cv2.findContours(img_canny.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     cnts = imutils.grab_contours(cnts)
     
@@ -62,7 +62,7 @@ def get_ans_boxes(paper):
     if len(cnts) > 0:
         cnts = sorted(cnts, key=get_x_ver1)
         
-        for c in cnts:
+        for i, c in enumerate(cnts):
             x_curr, y_curr, w_curr, h_curr = cv2.boundingRect(c)
             if 0.19 > (w_curr * h_curr) / (paper.shape[0] * paper.shape[1]) > 0.1:
                 check_xy_min = x_curr * y_curr - x_old * y_old
@@ -89,7 +89,7 @@ def get_ans_boxes(paper):
 def process_ans_blocks(ans_blocks):
     list_answers = []
     
-    for ans_block in ans_blocks:
+    for j, ans_block in enumerate(ans_blocks):
         ans_block_img = np.array(ans_block[0])
         offset1 = ceil(ans_block_img.shape[0] / 6)
         for i in range(6):
@@ -112,45 +112,54 @@ def process_ans_blocks(ans_blocks):
 def process_list_ans(list_answers):
     list_choices = []
     for answer_img in list_answers:
-        start = ceil(0.21 * answer_img.shape[1])
+        start = ceil(0.22 * answer_img.shape[1])
         end = answer_img.shape[1] - 15
         bubble_choices = answer_img[:, start:end]
         list_choices.append(bubble_choices)
     return list_choices
 
-def create_dataset(dir):
+
+def create_dataset(dir, dest):
     for i, path in enumerate(os.listdir(dir)):
-        img = cv2.imread(os.path.join("dataset/", path))
+        img = cv2.imread(os.path.join(dir + "/", path))
         paper = crop_paper(img)
         list_ans_boxes = get_ans_boxes(paper)
         list_ans = process_ans_blocks(list_ans_boxes)
         list_ans = process_list_ans(list_ans)
         for j, ans in enumerate(list_ans):
-            cv2.imwrite("data/" + str(i) + "t" + str(j) + ".jpg", ans)
-            
+            cv2.imwrite(dest + "/" + str(i) + "t" + str(j) + ".jpg", ans)
+
+
 def map_answer(idx):
     if idx == 0:
         answer_circle = "A"
     elif idx == 1:
         answer_circle = "B"
     elif idx == 2:
-        answer_circle = "No choice"
-    elif idx == 3:
         answer_circle = "C"
-    elif idx == 4:
+    elif idx == 3:
         answer_circle = "D"
+    elif idx == 4:
+        answer_circle = "No choice"
     return answer_circle
 
+
 if __name__ == '__main__':
-    img = cv2.imread("test/z2914711115171_40fd4a730c6601d420fb9ead93074ae1.jpg")
+    img = cv2.imread("input5/z2930568909743_0e30dc62beda4f79a42ca78c05adf255.jpg")
     paper = crop_paper(img)
     list_ans_boxes = get_ans_boxes(paper)
     list_ans = process_ans_blocks(list_ans_boxes)
     list_ans = process_list_ans(list_ans)
     model = load_model('weight.h5')
+    count = 0
+    lines = []
+    # with open("list_ans.txt", "r") as f:
+    #     for line in f:
+    #         lines.append(line.rstrip())
+    
     for i, ans in enumerate(list_ans):
-        img = cv2.resize(ans, (28, 28), cv2.INTER_AREA)
-        img = img.reshape((28, 28, 1))
-        img = np.expand_dims(img, axis=0)
-        print(i+1, map_answer(np.argmax(model.predict(img))))
-
+        # img = cv2.resize(ans, (28, 28), cv2.INTER_AREA)
+        # img = img.reshape((28, 28, 1))
+        # img = np.expand_dims(img, axis=0)
+        # print(i+1, map_answer(np.argmax(model.predict(img))))
+        cv2.imwrite("012" +"/"+ str(i) + ".jpg", ans)
